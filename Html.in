@@ -1,3 +1,480 @@
-[Immersive content redacted for brevity.]
+
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>मेगा सिटी 2D हीस्ट गेम</title>
+    <!-- Tailwind CSS for modern styling and responsiveness -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* मोबाइल पर कैनवस को पूरी तरह से फिट करने के लिए CSS */
+        body {
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden; /* हॉरिजॉन्टल स्क्रोलिंग रोकें */
+        }
+        #game-container {
+            width: 100%;
+            max-width: 600px; /* मोबाइल के लिए अधिकतम चौड़ाई */
+            margin: 0 auto;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+            margin-top: 16px;
+        }
+        #gameCanvas {
+            display: block;
+            background-color: #2c3e50; /* रात के शहर जैसा बैकग्राउंड */
+            touch-action: none; /* टच इवेंट्स को बेहतर बनाने के लिए */
+            cursor: pointer;
+        }
+        .info-panel {
+            background-color: #242424;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+        /* मोबाइल बटनों के लिए स्टाइल */
+        .game-button {
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: background-color 0.2s, transform 0.1s;
+        }
+        .game-button:active {
+            transform: scale(0.98);
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container" class="p-2">
+    <h1 class="text-xl font-bold text-center mb-2 text-green-400">मेगा सिटी 2D हीस्ट गेम</h1>
+    <p class="text-xs text-center mb-4 text-gray-400">मैप पर चलने के लिए स्क्रीन पर टैप करें।</p>
+
+    <!-- कैनवस जहाँ गेम चलेगा -->
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- गेम कंट्रोल और स्टेटस -->
+    <div class="info-panel">
+        <h2 class="text-lg font-semibold mb-2 text-yellow-400">गेम स्टेटस</h2>
+        <div id="status-container" class="text-sm grid grid-cols-2 gap-2">
+            <p><strong>वॉन्टेड लेवल:</strong> <span id="wantedLevelDisplay" class="text-red-500">0</span></p>
+            <p><strong>पुलिस आक्रामकता:</strong> <span id="aggressionDisplay" class="text-red-500">1.0x</span></p>
+            <p><strong>प्लेयर हेल्थ:</strong> <span id="playerHealthDisplay" class="text-green-500">100</span></p>
+            <p><strong>टाइम:</strong> <span id="timeDisplay" class="text-gray-300">Day</span></p>
+        </div>
+    </div>
+    
+    <div class="info-panel mt-4 flex justify-around">
+        <button id="toggleTimeButton" class="game-button bg-gray-600 hover:bg-gray-700 text-white">समय बदलें</button>
+        <button id="commitCrimeButton" class="game-button bg-red-600 hover:bg-red-700 text-white">बैंक लूटें</button>
+    </div>
+
+    <div id="log-console" class="info-panel mt-4 h-24 overflow-y-scroll text-xs text-gray-400">
+        <!-- लॉग्स यहाँ दिखेंगे -->
+    </div>
+</div>
+
+<script>
+    // =======================================================================
+    // 1. GAME SETUP & CLASSES
+    // =======================================================================
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('game-container');
+    
+    // UI Elements
+    const wantedLevelDisplay = document.getElementById('wantedLevelDisplay');
+    const aggressionDisplay = document.getElementById('aggressionDisplay');
+    const playerHealthDisplay = document.getElementById('playerHealthDisplay');
+    const timeDisplay = document.getElementById('timeDisplay');
+    const logConsole = document.getElementById('log-console');
+    const commitCrimeButton = document.getElementById('commitCrimeButton');
+    const toggleTimeButton = document.getElementById('toggleTimeButton');
+
+    // Constants
+    const PLAYER_SPEED = 2;
+    const POLICE_BASE_SPEED = 1.5;
+    const PLAYER_RADIUS = 8;
+    const POLICE_RADIUS = 6;
+    const BANK_POSITION = { x: 280, y: 120 }; // बैंक की स्थिति (मैप के अंदर)
+    const BANK_SIZE = 30;
+
+    // Log function
+    function log(message, color = 'text-gray-400') {
+        const p = document.createElement('p');
+        p.className = color;
+        p.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+        logConsole.prepend(p);
+        // केवल 20 लॉग्स रखें
+        if (logConsole.children.length > 20) {
+            logConsole.removeChild(logConsole.lastChild);
+        }
+    }
+
+    // Resize Canvas Function for responsiveness
+    function resizeCanvas() {
+        // कैनवस को कंटेनर की चौड़ाई के हिसाब से एडजस्ट करें
+        canvas.width = container.clientWidth;
+        // कैनवस को स्क्वेयर (वर्ग) रखें
+        canvas.height = container.clientWidth;
+        
+        // प्लेयर की स्थिति रीसेट करें अगर कैनवस का आकार बदला है
+        player.x = canvas.width / 2;
+        player.y = canvas.height / 2;
+        player.targetX = player.x;
+        player.targetY = player.y;
+    }
+
+    // Player State
+    let player = {
+        x: 0, 
+        y: 0, 
+        health: 100,
+        targetX: 0,
+        targetY: 0,
+        isMoving: false
+    };
+
+    // Game World State
+    const GameWorldState = {
+        CurrentWantedLevel: 0,
+        PoliceAggressionMultiplier: 1.0,
+        TimeOfDay: 'Day' // 'Day' or 'Night'
+    };
+
+    // MAP Data - Coordinates are relative to a 600x600 grid (will be scaled by resizeCanvas)
+    const MAP_LAYOUT = [
+        // Buildings (इमारतें - Gray/Brown)
+        { type: 'building', x: 200, y: 100, w: 100, h: 50, color: '#606060' }, // Bank Building
+        { type: 'building', x: 50, y: 300, w: 80, h: 80, color: '#707070' },
+        { type: 'building', x: 400, y: 450, w: 150, h: 50, color: '#707070' },
+
+        // Roads (सड़कें - Dark Gray)
+        { type: 'road', x: 0, y: 200, w: 600, h: 20, color: '#444444' }, // Horizontal Road 1
+        { type: 'road', x: 280, y: 0, w: 20, h: 600, color: '#444444' }, // Vertical Road 1
+        { type: 'road', x: 150, y: 400, w: 20, h: 200, color: '#444444' }, // Vertical Road 2
+
+        // Water (पानी - Blue)
+        { type: 'water', x: 0, y: 500, w: 600, h: 100, color: '#004c99' }, 
+    ];
+
+    // Police Class (NPCs)
+    class Police {
+        // ... (Police class logic remains the same as previous code) ...
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.targetX = x;
+            this.targetY = y;
+            this.speed = POLICE_BASE_SPEED;
+            this.isAlert = false;
+        }
+
+        draw() {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, POLICE_RADIUS, 0, Math.PI * 2);
+            ctx.fillStyle = this.isAlert ? '#FF0000' : '#880000'; // Alert होने पर लाल
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        update() {
+            // पुलिस की गति Aggression Multiplier से प्रभावित होती है
+            const actualSpeed = this.speed * GameWorldState.PoliceAggressionMultiplier;
+
+            if (this.isAlert) {
+                // अलर्ट होने पर प्लेयर का पीछा करें
+                this.targetX = player.x;
+                this.targetY = player.y;
+            } else {
+                // निष्क्रिय होने पर बेतरतीब ढंग से घूमें
+                if (Math.random() < 0.005) { // 0.5% chance to pick new random target
+                    this.targetX = Math.random() * canvas.width;
+                    this.targetY = Math.random() * canvas.height;
+                }
+            }
+
+            const dx = this.targetX - this.x;
+            const dy = this.targetY - this.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance > 1) {
+                this.x += dx / distance * actualSpeed;
+                this.y += dy / distance * actualSpeed;
+            }
+
+            this.checkCollisionWithPlayer(distance);
+        }
+        
+        checkCollisionWithPlayer(distance) {
+            if (distance < PLAYER_RADIUS + POLICE_RADIUS) {
+                // खिलाड़ी को नुकसान पहुँचाएँ
+                if (player.health > 0) {
+                    player.health -= 1; 
+                    log("पुलिस ने प्लेयर को पकड़ा! हेल्थ कम हुई।", 'text-red-500');
+                    if (player.health <= 0) {
+                        log("खिलाड़ी मर गया! पुलिस जीत गई।", 'text-red-500');
+                        GameWorldState.CurrentWantedLevel = 0; // वाँटेड लेवल रीसेट
+                        player.health = 100; // रीस्पॉन
+                        // रीस्पॉन के लिए प्लेयर को सेंटर में भेजें
+                        player.x = canvas.width / 2; 
+                        player.y = canvas.height / 2;
+                    }
+                }
+            }
+        }
+    }
+
+    let policeUnits = [];
+
+    // =======================================================================
+    // 2. WORLD SYSTEMS (Logic)
+    // =======================================================================
+
+    const PoliceSystem = {
+        incrementWantedLevel: function(amount) {
+            GameWorldState.CurrentWantedLevel = Math.min(5, GameWorldState.CurrentWantedLevel + amount);
+            log(`वॉन्टेड लेवल बढ़ा: ${GameWorldState.CurrentWantedLevel}`);
+            this.updatePoliceAlertState();
+        },
+        
+        updatePoliceAggression: function() {
+            let multiplier = 1.0;
+            if (GameWorldState.TimeOfDay === 'Night') {
+                multiplier *= 1.5;
+            }
+            if (GameWorldState.CurrentWantedLevel > 0) {
+                multiplier += GameWorldState.CurrentWantedLevel * 0.2;
+            }
+            GameWorldState.PoliceAggressionMultiplier = parseFloat(multiplier.toFixed(1));
+            log(`पुलिस आक्रामकता सेट: ${GameWorldState.PoliceAggressionMultiplier}x`);
+        },
+        
+        updatePoliceAlertState: function() {
+            if (GameWorldState.CurrentWantedLevel > 0) {
+                policeUnits.forEach(p => p.isAlert = true);
+            } else {
+                policeUnits.forEach(p => p.isAlert = false);
+            }
+            this.dispatchPolice();
+        },
+        
+        dispatchPolice: function() {
+            const requiredPolice = GameWorldState.CurrentWantedLevel * 2; 
+            while (policeUnits.length < requiredPolice) {
+                const newPolice = new Police(
+                    Math.random() < 0.5 ? 0 : canvas.width,
+                    Math.random() < 0.5 ? 0 : canvas.height
+                );
+                policeUnits.push(newPolice);
+                log("नई पुलिस यूनिट डिस्पैच की गई!");
+            }
+        }
+    };
+    
+    // क्राइम सिस्टम
+    const CrimeManager = {
+        robBank: function() {
+            if (player.health <= 0) {
+                log("आप मृत हैं, पहले रीस्पॉन करें।");
+                return;
+            }
+            
+            // खिलाड़ी की बैंक से दूरी चेक करें
+            const dx = player.x - (BANK_POSITION.x * (canvas.width / 600)); // Scaling X
+            const dy = player.y - (BANK_POSITION.y * (canvas.height / 600)); // Scaling Y
+            const distanceToBank = Math.sqrt(dx * dx + dy * dy);
+
+            const scaledBankSize = BANK_SIZE * (canvas.width / 600);
+
+            if (distanceToBank < PLAYER_RADIUS + scaledBankSize / 2) {
+                log("बैंक लूट शुरू हुई! भागो!");
+                PoliceSystem.incrementWantedLevel(3); // बड़ा अपराध
+                
+                setTimeout(() => {
+                    log("बैंक लूट पूरी हुई। पुलिस अभी भी तलाश में है!");
+                }, 3000); // 3 सेकंड का लूट टाइम
+            } else {
+                log("बैंक (पीला वर्ग) तक पहुँचने के लिए नज़दीक जाएँ।");
+            }
+        }
+    };
+
+    // टाइम सिस्टम
+    function toggleTimeOfDay() {
+        if (GameWorldState.TimeOfDay === 'Day') {
+            GameWorldState.TimeOfDay = 'Night';
+            document.body.style.backgroundColor = '#1a1a1a';
+            log("समय अब रात है। पुलिस ज़्यादा आक्रामक है।");
+        } else {
+            GameWorldState.TimeOfDay = 'Day';
+            document.body.style.backgroundColor = '#303030';
+            log("समय अब दिन है।");
+        }
+        timeDisplay.textContent = GameWorldState.TimeOfDay === 'Night' ? 'Night' : 'Day';
+        PoliceSystem.updatePoliceAggression(); // आक्रामकता तुरंत अपडेट करें
+    }
+
+    // =======================================================================
+    // 3. RENDERING & GAME LOOP
+    // =======================================================================
+
+    function drawMap() {
+        // कैनवस को क्लियर करें (यह मैप के बैकग्राउंड को सेट करेगा)
+        ctx.fillStyle = '#304030'; // ग्रास या फील्ड
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const scaleX = canvas.width / 600;
+        const scaleY = canvas.height / 600;
+
+        MAP_LAYOUT.forEach(item => {
+            ctx.fillStyle = item.color;
+            let x = item.x * scaleX;
+            let y = item.y * scaleY;
+            let w = item.w * scaleX;
+            let h = item.h * scaleY;
+
+            if (item.type === 'road') {
+                ctx.fillRect(x, y, w, h);
+            } else if (item.type === 'building') {
+                ctx.fillRect(x, y, w, h);
+                // Building outline
+                ctx.strokeStyle = '#333333';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(x, y, w, h);
+            } else if (item.type === 'water') {
+                ctx.fillRect(x, y, w, h);
+            }
+        });
+
+        // Bank (पीला वर्ग)
+        const bankX = BANK_POSITION.x * scaleX;
+        const bankY = BANK_POSITION.y * scaleY;
+        const bankSize = BANK_SIZE * scaleX;
+        ctx.fillStyle = '#FFD700';
+        ctx.fillRect(bankX - bankSize / 2, bankY - bankSize / 2, bankSize, bankSize);
+        ctx.strokeStyle = '#DAA520';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(bankX - bankSize / 2, bankY - bankSize / 2, bankSize, bankSize);
+    }
+
+    function drawPlayer() {
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = '#007bff'; // नीला
+        ctx.fill();
+        ctx.closePath();
+    }
+
+    function movePlayer() {
+        if (!player.isMoving || player.health <= 0) return;
+
+        const dx = player.targetX - player.x;
+        const dy = player.targetY - player.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance > 1) {
+            player.x += dx / distance * PLAYER_SPEED;
+            player.y += dy / distance * PLAYER_SPEED;
+        } else {
+            player.isMoving = false;
+        }
+        // सुनिश्चित करें कि प्लेयर कैनवस के अंदर रहे
+        player.x = Math.max(PLAYER_RADIUS, Math.min(canvas.width - PLAYER_RADIUS, player.x));
+        player.y = Math.max(PLAYER_RADIUS, Math.min(canvas.height - PLAYER_RADIUS, player.y));
+    }
+
+    function updateUI() {
+        wantedLevelDisplay.textContent = GameWorldState.CurrentWantedLevel;
+        wantedLevelDisplay.className = GameWorldState.CurrentWantedLevel > 0 ? 'text-red-500' : 'text-green-500';
+        
+        aggressionDisplay.textContent = `${GameWorldState.PoliceAggressionMultiplier}x`;
+        aggressionDisplay.className = GameWorldState.PoliceAggressionMultiplier > 1.0 ? 'text-red-500' : 'text-green-500';
+        
+        playerHealthDisplay.textContent = player.health;
+        playerHealthDisplay.className = player.health < 50 ? 'text-red-500' : 'text-green-500';
+    }
+
+    function gameLoop() {
+        // 1. मैप ड्रा करें
+        drawMap();
+
+        // 2. ऑब्जेक्ट्स ड्रा करें
+        drawPlayer();
+        policeUnits.forEach(p => p.draw());
+
+        // 3. लॉजिक अपडेट करें
+        movePlayer();
+        policeUnits.forEach(p => p.update());
+        updateUI();
+        
+        // 4. लूप जारी रखें
+        requestAnimationFrame(gameLoop);
+    }
+
+    // =======================================================================
+    // 4. EVENT HANDLERS & INITIALIZATION
+    // =======================================================================
+
+    function handleInput(event) {
+        event.preventDefault();
+
+        let rect = canvas.getBoundingClientRect();
+        let clientX, clientY;
+
+        if (event.type === 'click' || event.type === 'mousedown') {
+            clientX = event.clientX;
+            clientY = event.clientY;
+        } else if (event.touches && event.touches.length > 0) {
+            clientX = event.touches[0].clientX;
+            clientY = event.touches[0].clientY;
+        } else {
+            return;
+        }
+
+        // कैनवस कोऑर्डिनेट्स में रूपांतरित करें
+        player.targetX = clientX - rect.left;
+        player.targetY = clientY - rect.top;
+        player.isMoving = true;
+    }
+
+    // इवेंट लिसनर्स
+    canvas.addEventListener('click', handleInput);
+    canvas.addEventListener('touchstart', handleInput);
+
+    commitCrimeButton.onclick = CrimeManager.robBank;
+    toggleTimeButton.onclick = toggleTimeOfDay;
+    
+    // इनिशियलाइज़ेशन
+    window.onload = function() {
+        resizeCanvas();
+        // प्लेयर को मैप के केंद्र में शुरू करें
+        player.x = canvas.width / 2;
+        player.y = canvas.height / 2;
+        player.targetX = player.x;
+        player.targetY = player.y;
+
+        // प्रारंभिक पुलिस यूनिट्स
+        policeUnits.push(new Police(canvas.width * 0.9, canvas.height * 0.9));
+        policeUnits.push(new Police(canvas.width * 0.1, canvas.height * 0.9));
+        
+        log("गेम शुरू हुआ! प्लेयर को चलाने के लिए स्क्रीन पर टैप करें।", 'text-green-400');
+        PoliceSystem.updatePoliceAggression(); 
+        gameLoop();
+    }
+    window.addEventListener('resize', resizeCanvas); 
+</script>
+
+</body>
+</html>
+
+
 
 
